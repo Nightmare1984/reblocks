@@ -13,6 +13,9 @@ const Types = preload("res://addons/reblocks/types/types.gd")
 const Util = preload("res://addons/reblocks/ui/util.gd")
 const VariableDefinition = preload("res://addons/reblocks/code_generation/variable_definition.gd")
 
+const ZOOM_IN_ICON_TEXTURE = preload("res://addons/reblocks/ui/block_canvas/zoom_in_icon_texture.tres")
+const ZOOM_OUT_ICON_TEXTURE = preload("res://addons/reblocks/ui/block_canvas/zoom_out_icon_texture.tres")
+
 const EXTEND_MARGIN: float = 800
 const BLOCK_AUTO_PLACE_MARGIN: Vector2 = Vector2(25, 8)
 const DEFAULT_WINDOW_MARGIN: Vector2 = Vector2(25, 25)
@@ -37,8 +40,8 @@ const ZOOM_FACTOR: float = 1.1
 @onready var _replace_block_code_button: Button = %ReplaceBlockCodeButton
 
 @onready var _open_scene_icon = _open_scene_button.get_theme_icon("Load", "EditorIcons")
-@onready var _icon_zoom_out := EditorInterface.get_editor_theme().get_icon("ZoomLess", "EditorIcons")
-@onready var _icon_zoom_in := EditorInterface.get_editor_theme().get_icon("ZoomMore", "EditorIcons")
+@onready var _icon_zoom_out := EditorInterface.get_editor_theme().get_icon("ZoomLess", "EditorIcons") if EditorInterface.has_method("get_editor_theme") else ZOOM_OUT_ICON_TEXTURE
+@onready var _icon_zoom_in := EditorInterface.get_editor_theme().get_icon("ZoomMore", "EditorIcons") if EditorInterface.has_method("get_editor_theme") else ZOOM_IN_ICON_TEXTURE
 
 @onready var _mouse_override: Control = %MouseOverride
 @onready var _zoom_buttons: HBoxContainer = %ZoomButtons
@@ -133,21 +136,27 @@ func _drop_node(at_position: Vector2, data: Variant) -> void:
 	reconnect_block.emit(block)
 
 
-func _drop_obj_property(at_position: Vector2, data: Variant) -> void:
-	var property_name = data["property"]
-	var property_value = data["value"]
-	var is_getter = !_modifier_ctrl
+## Return the parent class name where the property is defined.
+static func _get_classname_for_property(_class_name: StringName, property_name: StringName) -> StringName:
+	for parent_class_name in BlocksCatalog.get_parents(_class_name):
+		var property_list := ClassDB.class_get_property_list(parent_class_name, true)
+		var has_property = property_list.any(func(dict): return dict.name == property_name)
+		if has_property:
+			return parent_class_name
+	return &""
 
-	# Prepare a Variable block to set / get the property's value according to
-	# the modifier KEY_CTRL pressing.
-	var variable := VariableDefinition.new(property_name, typeof(property_value))
+
+func _drop_obj_property(at_position: Vector2, data: Variant) -> void:
+	var _class_name = _get_classname_for_property(data.object.get_class(), data["property"])
+	var property := {"name": data["property"], "type": typeof(data["value"])}
+	var is_getter = not _modifier_ctrl
+
 	var block_definition: BlockDefinition
 
 	if is_getter:
-		block_definition = BlocksCatalog.get_property_getter_block_definition(variable)
+		block_definition = BlocksCatalog.get_property_getter_block_definition(_class_name, property)
 	else:
-		block_definition = BlocksCatalog.get_property_setter_block_definition(variable)
-		block_definition.defaults = {"value": property_value}
+		block_definition = BlocksCatalog.get_property_setter_block_definition(_class_name, property)
 
 	var block = _context.block_script.instantiate_block(block_definition)
 	add_block(block, at_position)
@@ -205,7 +214,9 @@ func set_child(n: Node):
 func _on_context_changed():
 	clear_canvas()
 
-	var edited_node = EditorInterface.get_inspector().get_edited_object() as Node
+	var edited_node
+	if EditorInterface.has_method("get_inspector"):
+		edited_node = EditorInterface.get_inspector().get_edited_object() as Node
 
 	if _context.block_script != _current_block_script:
 		_window.position = Vector2(0, 0)
